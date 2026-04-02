@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+venv/
+env/
+.venv/
+.conda/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Node and frontend build output
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*
+
+# Data and index artifacts (generated locally)
+data/chroma/
+data/chroma_local/
+data/chroma_unified/
+data/analytics/*.sqlite3
+train/exports/
+
+# Models (too large for git)
+models/
+*.bin
+*.pt
+*.safetensors
+
+# Logs
+*.log
+logs/
