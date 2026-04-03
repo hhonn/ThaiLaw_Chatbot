@@ -7,8 +7,6 @@ import re
 import time as _time
 from typing import Callable, Generator, List, Tuple, TypeVar
 
-import torch
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -48,11 +46,10 @@ if not _api_key:
     )
 
 # Embedding + Vector DB
-# Use float16 to halve memory usage (~1.1 GB vs ~2.3 GB in float32)
-logger.info("Loading embedding model (BAAI/bge-m3) in float16...")
+# float32 — Cloud Run has 16Gi which is sufficient (~2.3 GB per model)
+logger.info("Loading embedding model (BAAI/bge-m3)...")
 _emb = HuggingFaceEmbeddings(
     model_name="BAAI/bge-m3",
-    model_kwargs={"torch_dtype": torch.float16},
     encode_kwargs={"normalize_embeddings": True},
 )
 _db = Chroma(persist_directory=CHROMA_DIR, embedding_function=_emb)
@@ -99,11 +96,10 @@ _all_docs         = _load_all_docs()
 _bm25_retriever   = BM25Retriever.from_documents(_all_docs, k=RETRIEVER_K)
 _vector_retriever = _db.as_retriever(search_kwargs={"k": RETRIEVER_K})
 
-# Cross-Encoder Reranker — float16 to halve memory (~1.1 GB vs ~2.3 GB)
-logger.info("Loading reranker (BAAI/bge-reranker-v2-m3) in float16...")
+# Cross-Encoder Reranker
+logger.info("Loading reranker (BAAI/bge-reranker-v2-m3)...")
 _reranker = CrossEncoder(
     "BAAI/bge-reranker-v2-m3",
-    automodel_args={"torch_dtype": torch.float16},
 )
 logger.info("All models loaded — system ready.")
 
