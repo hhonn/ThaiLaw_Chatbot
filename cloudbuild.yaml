@@ -53,6 +53,7 @@ steps:
           --min-instances=0 \
           --max-instances=3 \
           --timeout=300 \
+          --cpu-boost \
           --set-secrets=TYPHOON_API_KEY=TYPHOON_API_KEY:latest,SMTP_PASSWORD=SMTP_PASSWORD:latest,ANALYTICS_ADMIN_KEY=ANALYTICS_ADMIN_KEY:latest,SMTP_EMAIL=SMTP_EMAIL:latest \
           --set-env-vars=SMTP_HOST=smtp.gmail.com,SMTP_PORT=587,ANALYTICS_EXPORT_RETENTION_DAYS=30 \
           --set-env-vars=CHROMA_DIR=/app/data/chroma_unified \
@@ -116,6 +117,22 @@ steps:
           --min-instances=0 \
           --max-instances=3 \
           --set-env-vars=NEXT_PUBLIC_API_URL=$$BACKEND_URL
+
+  # ── Step 8: Update backend CORS_ORIGINS with live frontend URL ────────────
+  # CORS must list the real frontend origin or browsers will block all API calls.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: update-cors
+    waitFor: [deploy-frontend]
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        FRONTEND_URL=$$(gcloud run services describe ${_FRONTEND_SERVICE} \
+          --region=${_REGION} --format="value(status.url)")
+        echo "Updating CORS_ORIGINS to: $$FRONTEND_URL"
+        gcloud run services update ${_BACKEND_SERVICE} \
+          --region=${_REGION} \
+          --update-env-vars=CORS_ORIGINS=$$FRONTEND_URL
 
 images:
   - asia-southeast1-docker.pkg.dev/$PROJECT_ID/lawbot/${_BACKEND_SERVICE}:latest
