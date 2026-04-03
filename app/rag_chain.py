@@ -4,7 +4,8 @@ import json
 import logging
 import os
 import re
-from typing import Generator, List, Tuple
+import time as _time
+from typing import Callable, Generator, List, Tuple, TypeVar
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,7 +37,7 @@ load_dotenv()
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHROMA_DIR   = os.environ.get("CHROMA_DIR", os.path.join(PROJECT_ROOT, "data", "chroma_unified"))
 
-# ── Security: validate API key at startup (fail fast) ───────────────────────
+# Security: validate API key at startup (fail fast)
 _api_key = os.environ.get("TYPHOON_API_KEY", "").strip()
 if not _api_key:
     raise EnvironmentError(
@@ -44,7 +45,7 @@ if not _api_key:
         "Create a .env file with TYPHOON_API_KEY=<your_key>."
     )
 
-# ---------- Embedding + Vector DB ----------
+# Embedding + Vector DB
 logger.info("Loading embedding model (BAAI/bge-m3)...")
 _emb = HuggingFaceEmbeddings(
     model_name="BAAI/bge-m3",
@@ -52,7 +53,7 @@ _emb = HuggingFaceEmbeddings(
 )
 _db = Chroma(persist_directory=CHROMA_DIR, embedding_function=_emb)
 
-# ---------- BM25 (keyword) retriever ----------
+# BM25 (keyword) retriever
 def _strip_context_prefix(text: str) -> str:
     """Remove the [law | section] prefix added during indexing for cleaner BM25 matching."""
     if text.startswith("[") and "]\n" in text[:200]:
@@ -94,12 +95,12 @@ _all_docs         = _load_all_docs()
 _bm25_retriever   = BM25Retriever.from_documents(_all_docs, k=RETRIEVER_K)
 _vector_retriever = _db.as_retriever(search_kwargs={"k": RETRIEVER_K})
 
-# ---------- Cross-Encoder Reranker ----------
+# Cross-Encoder Reranker
 logger.info("Loading reranker (BAAI/bge-reranker-v2-m3)...")
 _reranker = CrossEncoder("BAAI/bge-reranker-v2-m3")
 logger.info("All models loaded — system ready.")
 
-# ---------- Hybrid retrieval (BM25 + Vector via Reciprocal Rank Fusion) ----------
+# Hybrid retrieval (BM25 + Vector via Reciprocal Rank Fusion)
 
 def _hybrid_retrieve(query: str, k: int = 25) -> List[Document]:
     """Merge BM25 and vector results using Reciprocal Rank Fusion (RRF)."""
@@ -126,7 +127,7 @@ def _hybrid_retrieve(query: str, k: int = 25) -> List[Document]:
     return [doc_map[dk] for dk, _ in ranked[:k]]
 
 
-# ---------- Query classification ----------
+# Query classification
 
 CATEGORY_KEYWORDS = {
     "แรงงาน": ["นายจ้าง", "ลูกจ้าง", "เลิกจ้าง", "ค่าจ้าง", "โอที", "ล่วงเวลา", "ค่าชดเชย",
@@ -156,15 +157,36 @@ def _classify_query(question: str) -> str:
     return best if scores[best] > 0 else "ทั่วไป"
 
 
-# ---------- Typhoon API client ----------
+# Typhoon API client
 _client = OpenAI(
     api_key=os.environ.get("TYPHOON_API_KEY", ""),
     base_url="https://api.opentyphoon.ai/v1",
 )
-TYPHOON_MODEL = "typhoon-v2.5-30b-a3b-instruct"
+TYPHOON_MODEL = os.environ.get("TYPHOON_MODEL", "typhoon-v2.5-30b-a3b-instruct")
+
+_LLM_MAX_RETRIES = 3
+_T = TypeVar("_T")
 
 
-# ---------- Helpers ----------
+def _llm_call_with_retry(create_fn: Callable[[], _T], *, max_attempts: int = _LLM_MAX_RETRIES) -> _T:
+    """Call create_fn() with exponential backoff on transient errors."""
+    last_exc: Exception = RuntimeError("No attempts made")
+    for attempt in range(max_attempts):
+        try:
+            return create_fn()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_attempts - 1:
+                wait = 2 ** attempt  # 1s, 2s
+                logger.warning(
+                    "LLM API attempt %d/%d failed: %s — retrying in %ds",
+                    attempt + 1, max_attempts, exc, wait,
+                )
+                _time.sleep(wait)
+    raise last_exc
+
+
+# Helpers
 
 def _citations_markdown(docs) -> str:
     seen, lines = set(), []
@@ -282,7 +304,7 @@ def _build_messages(question: str, context: str, history: List[Tuple[str, str]])
     return messages
 
 
-# ---------- History-aware query rewriting ----------
+# History-aware query rewriting
 
 def _rewrite_with_history(question: str, history: List[Tuple[str, str]]) -> str:
     """Rewrite a follow-up question into a standalone query using chat history."""
@@ -315,7 +337,7 @@ def _rewrite_with_history(question: str, history: List[Tuple[str, str]]) -> str:
     return question
 
 
-# ---------- Multi-query expansion (improved) ----------
+# Multi-query expansion (improved)
 
 def _expand_queries(question: str, category: str) -> List[str]:
     """Use LLM to generate 3 alternative search queries with category context."""
@@ -347,7 +369,7 @@ def _expand_queries(question: str, category: str) -> List[str]:
     return [question]
 
 
-# ---------- Context compression ----------
+# Context compression
 
 def _compress_context(question: str, doc: Document) -> str:
     """Extract only the relevant portion of a document for the given question."""
@@ -381,7 +403,7 @@ def _compress_context(question: str, doc: Document) -> str:
     return " ".join(s[2] for s in selected)[:800]
 
 
-# ---------- Public API ----------
+# Public API
 
 def get_context_and_meta(question: str, history: List[Tuple[str, str]] | None = None):
     """Hybrid-retrieve → rerank → compress → return (context_str, citations_md, domain, risk)."""
@@ -415,6 +437,12 @@ def get_context_and_meta(question: str, history: List[Tuple[str, str]] | None = 
     candidates = list(seen_keys.values())
     logger.info("Candidates before reranking: %d", len(candidates))
 
+    if not candidates:
+        logger.warning(
+            "Retrieval miss — no documents found for query: '%s' (category: %s)",
+            search_query[:120], query_category,
+        )
+
     # Step 3: Rerank with cross-encoder + score threshold gating
     if len(candidates) > 1:
         pairs  = [(search_query, d.page_content) for d in candidates]
@@ -422,10 +450,17 @@ def get_context_and_meta(question: str, history: List[Tuple[str, str]] | None = 
         ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
 
         # Filter out low-relevance docs (score threshold gating)
-        ranked = [(s, d) for s, d in ranked if s >= MIN_RERANK_SCORE]
-        if not ranked:
-            ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)[:3]
-        
+        above_threshold = [(s, d) for s, d in ranked if s >= MIN_RERANK_SCORE]
+        if not above_threshold:
+            logger.warning(
+                "Reranker threshold fallback: all %d docs scored below %.1f "
+                "(top score=%.2f) — using top 3",
+                len(ranked), MIN_RERANK_SCORE, ranked[0][0] if ranked else 0,
+            )
+            ranked = ranked[:3]
+        else:
+            ranked = above_threshold
+
         logger.info("Rerank scores: top=%.2f, bottom=%.2f, kept=%d",
                     ranked[0][0] if ranked else 0, ranked[-1][0] if ranked else 0, len(ranked))
 
@@ -551,6 +586,7 @@ def stream_answer(
             frequency_penalty=0.1,
             max_tokens=16000,  # Typhoon counts prompt+output together; 16000 = model context window
             stream=True,
+            timeout=120,
         )
 
         partial = ""
@@ -584,7 +620,7 @@ def answer_question(
     messages = _build_messages(question, context, history)
 
     try:
-        response = _client.chat.completions.create(
+        response = _llm_call_with_retry(lambda: _client.chat.completions.create(
             model=TYPHOON_MODEL,
             messages=messages,
             temperature=0.1,
@@ -593,7 +629,7 @@ def answer_question(
             max_tokens=16000,
             stream=False,
             timeout=120,
-        )
+        ))
         answer = (response.choices[0].message.content or "").strip()
         return answer, citations_md, domain, risk
     except Exception as exc:

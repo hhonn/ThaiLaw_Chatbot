@@ -18,7 +18,7 @@ const STORAGE_KEY_PREFIX = "thai-law-chatbot-history";
 const MAX_SESSIONS = 50;
 
 function generateId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  return crypto.randomUUID();
 }
 
 function extractTitle(messages: ChatMessage[]): string {

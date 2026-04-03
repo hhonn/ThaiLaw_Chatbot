@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { sendAuthCode, verifyAuthCode } from "../lib/api";
 
-/* ─── Types ─── */
+/* Types */
 interface LoginPageProps {
   onLogin: (user: GoogleUser) => void;
 }
@@ -16,7 +17,7 @@ export interface GoogleUser {
 
 export type AppUser = GoogleUser;
 
-/* ─── Google credential JWT decoder (no library needed) ─── */
+/* Google credential JWT decoder (no library needed) */
 function decodeJwt(token: string): Record<string, string> {
   const base64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
   const json = decodeURIComponent(
@@ -28,7 +29,7 @@ function decodeJwt(token: string): Record<string, string> {
   return JSON.parse(json);
 }
 
-/* ─── Config ─── */
+/* Config */
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
 
@@ -40,13 +41,10 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   const [loginStep, setLoginStep] = useState<"form" | "emailSent" | "enterCode">("form");
   const [verificationCode, setVerificationCode] = useState("");
 
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
-
   const turnstileRef = useRef<HTMLDivElement>(null);
   const googleBtnRef = useRef<HTMLDivElement>(null);
 
-  /* ─── Load Cloudflare Turnstile ─── */
+  /* Load Cloudflare Turnstile */
   useEffect(() => {
     if (!TURNSTILE_SITE_KEY) return;
     const existing = document.querySelector('script[src*="turnstile"]');
@@ -69,7 +67,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
     document.head.appendChild(script);
   }, []);
 
-  /* ─── Google credential handler ─── */
+  /* Google credential handler */
   const handleGoogleCredential = useCallback(
     (response: { credential: string }) => {
       setIsLoading(true);
@@ -90,7 +88,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
     [onLogin]
   );
 
-  /* ─── Load Google Identity Services script (once) ─── */
+  /* Load Google Identity Services script (once) */
   useEffect(() => {
     if (!GOOGLE_CLIENT_ID) return;
     const w = window as unknown as Record<string, unknown>;
@@ -116,7 +114,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
     document.head.appendChild(script);
   }, []);
 
-  /* ─── Render Google button (re-runs when SDK ready or callback changes) ─── */
+  /* Render Google button (re-runs when SDK ready or callback changes) */
   useEffect(() => {
     if (!googleReady || !GOOGLE_CLIENT_ID || !googleBtnRef.current) return;
     const w = window as unknown as Record<string, { accounts: { id: { initialize: Function; renderButton: Function } } }>;
@@ -142,7 +140,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
     });
   }, [googleReady, handleGoogleCredential]);
 
-  /* ─── Chat demo messages ─── */
+  /* Chat demo messages */
   const demoMessages = [
     { role: "user", text: "ถ้าถูกเลิกจ้างโดยไม่แจ้งล่วงหน้า จะได้ค่าชดเชยไหม?" },
     { role: "bot", text: "ได้ครับ ตาม พ.ร.บ.คุ้มครองแรงงาน มาตรา 118 ลูกจ้างที่ถูกเลิกจ้างมีสิทธิได้รับค่าชดเชยตามอายุงาน เช่น ทำงาน 1-3 ปี ได้ค่าชดเชย 90 วัน และถ้าไม่แจ้งล่วงหน้า ยังมีสิทธิได้ค่าสินจ้างแทนการบอกกล่าวล่วงหน้าด้วยครับ" },
@@ -157,7 +155,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
       fontFamily: "'Inter', 'Noto Sans Thai', -apple-system, sans-serif",
       color: "#e8e4df",
     }}>
-      {/* ══════════ LEFT SIDE ══════════ */}
+      {/* LEFT SIDE */}
       <div style={{
         flex: 1,
         display: "flex",
@@ -205,7 +203,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
             ระบบ AI ให้ข้อมูลกฎหมายไทยเบื้องต้น พร้อมอ้างอิงมาตราที่เกี่ยวข้อง
           </p>
 
-          {/* ── Login Card ── */}
+          {/* Login Card */}
           <div style={{
             background: "#2a2a2a",
             borderRadius: 16,
@@ -213,7 +211,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
             border: "1px solid rgba(255,255,255,0.08)",
           }}>
 
-            {/* ═══ Step: Email Sent ═══ */}
+            {/* Step: Email Sent */}
             {loginStep === "emailSent" && (
               <div style={{ textAlign: "center", padding: "16px 0" }}>
                 <div style={{
@@ -246,8 +244,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
                       onClick={async () => {
                         setIsLoading(true); setError("");
                         try {
-                          const res = await fetch(`${API_BASE}/api/auth/send-code`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: email.trim() }) });
-                          if (!res.ok) { const d = await res.json().catch(() => null); throw new Error(d?.detail || "ส่งอีเมลไม่สำเร็จ"); }
+                          await sendAuthCode(email.trim());
                         } catch (e) { setError(e instanceof Error ? e.message : "เกิดข้อผิดพลาด"); }
                         finally { setIsLoading(false); }
                       }}
@@ -261,7 +258,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
               </div>
             )}
 
-            {/* ═══ Step: Enter Code ═══ */}
+            {/* Step: Enter Code */}
             {loginStep === "enterCode" && (
               <div style={{ textAlign: "center", padding: "16px 0" }}>
                 <div style={{
@@ -285,8 +282,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
                     if (e.key === "Enter" && verificationCode.length >= 4) {
                       setIsLoading(true); setError("");
                       try {
-                        const res = await fetch(`${API_BASE}/api/auth/verify-code`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: email.trim(), code: verificationCode }) });
-                        if (!res.ok) { const d = await res.json().catch(() => null); throw new Error(d?.detail || "รหัสไม่ถูกต้อง"); }
+                        await verifyAuthCode(email.trim(), verificationCode);
                         onLogin({ type: "google", name: email.split("@")[0], email: email.trim(), picture: "" });
                       } catch (err) { setError(err instanceof Error ? err.message : "เกิดข้อผิดพลาด"); setIsLoading(false); }
                     }
@@ -297,8 +293,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
                     if (verificationCode.length < 4) { setError("กรุณากรอกรหัสยืนยัน"); return; }
                     setIsLoading(true); setError("");
                     try {
-                      const res = await fetch(`${API_BASE}/api/auth/verify-code`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: email.trim(), code: verificationCode }) });
-                      if (!res.ok) { const d = await res.json().catch(() => null); throw new Error(d?.detail || "รหัสไม่ถูกต้อง"); }
+                      await verifyAuthCode(email.trim(), verificationCode);
                       onLogin({ type: "google", name: email.split("@")[0], email: email.trim(), picture: "" });
                     } catch (err) { setError(err instanceof Error ? err.message : "เกิดข้อผิดพลาด"); setIsLoading(false); }
                   }}
@@ -319,7 +314,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
               </div>
             )}
 
-            {/* ═══ Step: Login Form ═══ */}
+            {/* Step: Login Form */}
             {loginStep === "form" && (<>
             {/* Google Sign-In */}
             {GOOGLE_CLIENT_ID ? (
@@ -419,15 +414,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
                 setIsLoading(true);
                 setError("");
                 try {
-                  const res = await fetch(`${API_BASE}/api/auth/send-code`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ email: email.trim() }),
-                  });
-                  if (!res.ok) {
-                    const data = await res.json().catch(() => null);
-                    throw new Error(data?.detail || "ไม่สามารถส่งอีเมลได้");
-                  }
+                  await sendAuthCode(email.trim());
                   setLoginStep("emailSent");
                 } catch (e) {
                   setError(e instanceof Error ? e.message : "เกิดข้อผิดพลาด");
@@ -491,7 +478,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         </div>
       </div>
 
-      {/* ══════════ RIGHT SIDE — Chat Preview ══════════ */}
+      {/* RIGHT SIDE — Chat Preview */}
       <div className="hidden lg:flex" style={{
         width: "45%", maxWidth: 560,
         flexDirection: "column",

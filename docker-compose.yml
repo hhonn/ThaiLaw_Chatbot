@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      - CHROMA_DIR=/app/data/chroma_unified
+      - ANALYTICS_DB_PATH=/app/data/analytics/usage.sqlite3
+      - OTP_DB_PATH=/app/data/analytics/otp.sqlite3
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        # Baked into Next.js at build time — must point at the real backend URL.
+        # For local dev: http://backend:8000 (Docker internal DNS)
+        # For Cloud Run: https://<backend-service-url>
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://backend:8000}
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://backend:8000}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

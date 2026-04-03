@@ -1,0 +1,25 @@
+# Default: auto line-ending normalization
+* text=auto
+
+# Shell scripts must use LF (run on Linux)
+*.sh text eol=lf
+
+# YAML / Docker config must use LF
+*.yaml text eol=lf
+*.yml  text eol=lf
+Dockerfile* text eol=lf
+
+# Windows-only scripts: CRLF is fine
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files: no conversion
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.bin  binary
+*.db   binary
+*.sqlite3 binary

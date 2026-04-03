@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import collections
+import hmac
 import json
 import logging
 import os
 import sys
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -43,6 +46,32 @@ logger = logging.getLogger(__name__)
 init_analytics_db()
 ANALYTICS_ADMIN_KEY = os.environ.get("ANALYTICS_ADMIN_KEY", "").strip()
 
+# ── Simple sliding-window rate limiter (in-memory) ────────────────────────
+_rl_lock = threading.Lock()
+_rl_windows: dict[str, collections.deque] = {}
+
+
+def _rate_limit_check(key: str, max_requests: int, window_seconds: int) -> bool:
+    """Return True if within limit, False if exceeded. Thread-safe."""
+    now = time.time()
+    with _rl_lock:
+        dq = _rl_windows.setdefault(key, collections.deque())
+        cutoff = now - window_seconds
+        while dq and dq[0] < cutoff:
+            dq.popleft()
+        if len(dq) >= max_requests:
+            return False
+        dq.append(now)
+        return True
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 # FastAPI app
 
 app = FastAPI(
@@ -51,15 +80,22 @@ app = FastAPI(
     description="RAG-powered Thai law Q&A API with hybrid search, reranking, and streaming.",
 )
 
-# CORS — allow Next.js dev server
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+# CORS — configurable via env var; fallback to localhost dev origins
+_cors_origins_env = os.environ.get("CORS_ORIGINS", "")
+CORS_ORIGINS: list[str] = (
+    [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+    if _cors_origins_env
+    else [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:7860",
         "http://127.0.0.1:7860",
-    ],
+    ]
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -142,21 +178,27 @@ class AnalyticsBootstrapRequest(BaseModel):
 # Auth endpoints
 
 @app.post("/api/auth/send-code")
-async def auth_send_code(req: SendCodeRequest):
-    """Send a 6-digit OTP to the given email address."""
+async def auth_send_code(req: SendCodeRequest, request: Request):
+    """Send a 6-digit OTP to the given email address (rate-limited per IP)."""
+    ip = _client_ip(request)
+    if not _rate_limit_check(f"send-code:ip:{ip}", max_requests=10, window_seconds=3600):
+        raise HTTPException(status_code=429, detail="ส่งคำขอบ่อยเกินไป กรุณารอแล้วลองใหม่")
     try:
         send_otp(req.email)
         return {"ok": True, "message": "รหัสยืนยันถูกส่งไปยังอีเมลแล้ว"}
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=429, detail=str(exc))
     except Exception as exc:
         logger.exception("Failed to send OTP: %s", exc)
         raise HTTPException(status_code=500, detail="ไม่สามารถส่งอีเมลได้ กรุณาลองใหม่")
 
 
 @app.post("/api/auth/verify-code")
-async def auth_verify_code(req: VerifyCodeRequest):
-    """Verify the OTP code for a given email."""
+async def auth_verify_code(req: VerifyCodeRequest, request: Request):
+    """Verify the OTP code for a given email (rate-limited per IP)."""
+    ip = _client_ip(request)
+    if not _rate_limit_check(f"verify-code:ip:{ip}", max_requests=20, window_seconds=3600):
+        raise HTTPException(status_code=429, detail="ลองบ่อยเกินไป กรุณารอแล้วลองใหม่")
     if verify_otp(req.email, req.code):
         return {"ok": True, "email": req.email, "name": req.email.split("@")[0]}
     raise HTTPException(status_code=401, detail="รหัสยืนยันไม่ถูกต้องหรือหมดอายุ")
@@ -275,24 +317,62 @@ async def analytics_bootstrap_training_data(req: AnalyticsBootstrapRequest, requ
 
 @app.get("/api/health")
 async def health():
-    """Health check endpoint."""
-    return {"status": "ok", "model": "typhoon-v2.5-30b-a3b-instruct"}
+    """Health check — verifies ChromaDB and LLM API reachability."""
+    from rag_chain import _db, _client, TYPHOON_MODEL
+
+    checks: dict[str, str] = {}
+
+    # Check ChromaDB
+    try:
+        count = _db._collection.count()
+        checks["chromadb"] = f"ok ({count} docs)"
+    except Exception as exc:
+        checks["chromadb"] = f"error: {exc}"
+
+    # Check LLM API (cheap probe — HEAD request to avoid SDK response parsing issues)
+    try:
+        import httpx
+        api_key = os.getenv("TYPHOON_API_KEY", "")
+        resp = httpx.get(
+            "https://api.opentyphoon.ai/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        checks["llm_api"] = "ok"
+    except Exception as exc:
+        checks["llm_api"] = f"error: {exc}"
+
+    all_ok = all(v.startswith("ok") for v in checks.values())
+    return {
+        "status": "ok" if all_ok else "degraded",
+        "model": TYPHOON_MODEL,
+        "checks": checks,
+    }
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
-    """Non-streaming chat endpoint."""
+async def chat(req: ChatRequest, request: Request):
+    """Non-streaming chat endpoint (rate-limited: 30 req/min per IP)."""
+    ip = _client_ip(request)
+    if not _rate_limit_check(f"chat:ip:{ip}", max_requests=30, window_seconds=60):
+        raise HTTPException(status_code=429, detail="ส่งคำถามบ่อยเกินไป กรุณารอสักครู่")
     pairs = _history_to_pairs(req.history)
     answer, citations, domain, risk = answer_question(req.message, pairs)
     return ChatResponse(answer=answer, citations=citations, domain=domain, risk=risk)
 
 
 @app.post("/api/chat/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, request: Request):
     """
     Streaming chat endpoint using Server-Sent Events (SSE).
+    Rate-limited: 30 req/min per IP.
     Each event is a JSON object with partial answer + metadata.
     """
+    ip = _client_ip(request)
+    if not _rate_limit_check(f"chat:ip:{ip}", max_requests=30, window_seconds=60):
+        raise HTTPException(status_code=429, detail="ส่งคำถามบ่อยเกินไป กรุณารอสักครู่")
+
     pairs = _history_to_pairs(req.history)
 
     def event_generator():
@@ -311,10 +391,7 @@ async def chat_stream(req: ChatRequest):
             yield "data: [DONE]\n\n"
         except Exception as exc:
             logger.exception("Stream error: %s", exc)
-            err = json.dumps(
-                {"error": str(exc)},
-                ensure_ascii=False,
-            )
+            err = json.dumps({"error": str(exc)}, ensure_ascii=False)
             yield f"data: {err}\n\n"
             yield "data: [DONE]\n\n"
 
@@ -348,9 +425,11 @@ def _require_analytics_admin(request: Optional[Request]) -> None:
         return
     if request is None:
         raise HTTPException(status_code=401, detail="Unauthorized")
-
-    provided = request.headers.get("x-analytics-key", "").strip()
-    if provided != ANALYTICS_ADMIN_KEY:
+    from urllib.parse import unquote
+    raw = request.headers.get("x-analytics-key", "").strip()
+    provided = unquote(raw)
+    # Constant-time comparison to prevent timing attacks
+    if not hmac.compare_digest(provided, ANALYTICS_ADMIN_KEY):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 # Run with uvicorn

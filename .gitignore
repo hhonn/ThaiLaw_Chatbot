@@ -44,3 +44,6 @@ models/
 # Logs
 *.log
 logs/
+
+# Evaluation output (generated, not source)
+eval_results.json

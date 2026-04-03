@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../lib/api";
 
 interface ChatAreaProps {
@@ -34,6 +34,53 @@ export default function ChatArea({
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
+
+  // Typewriter streaming animation
+  const typeTarget = useRef("");
+  const typeDisplayed = useRef("");
+  const typeRafId = useRef<number | null>(null);
+  const [typedContent, setTypedContent] = useState("");
+  const CHARS_PER_FRAME = 6;
+
+  const lastAssistantIdx = isLoading
+    ? messages.reduce((last, m, i) => (m.role === "assistant" ? i : last), -1)
+    : -1;
+  const streamingContent = lastAssistantIdx >= 0 ? messages[lastAssistantIdx]?.content ?? "" : "";
+
+  // Keep target ref in sync with each incoming SSE chunk
+  useEffect(() => {
+    typeTarget.current = streamingContent;
+  }, [streamingContent]);
+
+  // Start/stop rAF tick loop based on isLoading
+  useEffect(() => {
+    if (!isLoading) {
+      if (typeRafId.current !== null) {
+        cancelAnimationFrame(typeRafId.current);
+        typeRafId.current = null;
+      }
+      typeTarget.current = "";
+      typeDisplayed.current = "";
+      return;
+    }
+    function tick() {
+      const target = typeTarget.current;
+      const d = typeDisplayed.current;
+      if (d.length < target.length) {
+        const next = target.slice(0, Math.min(d.length + CHARS_PER_FRAME, target.length));
+        typeDisplayed.current = next;
+        setTypedContent(next);
+      }
+      typeRafId.current = requestAnimationFrame(tick);
+    }
+    typeRafId.current = requestAnimationFrame(tick);
+    return () => {
+      if (typeRafId.current !== null) {
+        cancelAnimationFrame(typeRafId.current);
+        typeRafId.current = null;
+      }
+    };
+  }, [isLoading]);
 
   const isEmpty = messages.length === 0;
 
@@ -70,23 +117,31 @@ export default function ChatArea({
           </div>
         </div>
       ) : (
-        /* ── Messages ── */
+        /* Messages */
         <div style={{ maxWidth: 740, margin: "0 auto", padding: "24px 28px 28px" }}>
           {messages.map((msg, i) => {
             const isUser = msg.role === "user";
             const isLatestAssistant = !isUser && i === messages.length - 1;
             const showAnalysis = isLatestAssistant && (domain !== "—" || risk !== "—");
-            const contentHtml = isLatestAssistant && citations
-              ? `${renderMarkdown(msg.content)}${renderCitationsInline(citations)}`
-              : renderMarkdown(msg.content);
+            const isStreaming = isLoading && i === lastAssistantIdx;
+            const contentHtml = isStreaming
+              ? renderMarkdown(typedContent) + '<span class="typing-cursor"></span>'
+              : (isLatestAssistant && citations
+                ? `${renderMarkdown(msg.content)}${renderCitationsInline(citations)}`
+                : renderMarkdown(msg.content));
+            const timeLabel = formatTime(msg.timestamp);
+
             return (
               <React.Fragment key={i}>
+                {/* Bubble */}
                 <div
                   className="animate-fadeUp"
                   style={{
-                    display: "flex", gap: 12, marginBottom: showAnalysis ? 8 : 20,
+                    display: "flex",
                     flexDirection: isUser ? "row-reverse" : "row",
                     alignItems: "flex-start",
+                    gap: 10,
+                    marginBottom: 4,
                   }}
                 >
                   {/* Avatar */}
@@ -103,27 +158,59 @@ export default function ChatArea({
                     {isUser ? "U" : "⚖️"}
                   </div>
 
-                  {/* Bubble / Content */}
-                  <div
-                    className="prose max-w-none"
-                    style={isUser ? {
-                      background: "var(--user-msg-bg)", color: "var(--user-msg-color)",
-                      borderRadius: "18px 18px 4px 18px",
-                      padding: "10px 16px", maxWidth: "72%",
-                      fontSize: 14, lineHeight: 1.7,
-                    } : {
-                      color: "var(--text-primary)",
-                      padding: "4px 0", maxWidth: "calc(100% - 42px)",
-                      fontSize: 14, lineHeight: 1.8,
-                    }}
-                    dangerouslySetInnerHTML={{ __html: contentHtml }}
-                  />
+                  {isUser ? (
+                    <div
+                      style={{
+                        background: "linear-gradient(135deg, #D97757, #E8956A)",
+                        color: "#ffffff",
+                        borderRadius: "18px 18px 4px 18px",
+                        padding: "10px 16px",
+                        maxWidth: "72%",
+                        fontSize: 14,
+                        lineHeight: 1.7,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {msg.content}
+                    </div>
+                  ) : (
+                    <div
+                      className="prose max-w-none bot-bubble"
+                      style={{
+                        background: "var(--bot-msg-bg)",
+                        border: "1px solid var(--bot-msg-border)",
+                        color: "var(--text-primary)",
+                        borderRadius: "4px 18px 18px 18px",
+                        padding: "14px 18px",
+                        maxWidth: "calc(100% - 42px)",
+                        fontSize: 14,
+                        lineHeight: 1.8,
+                      }}
+                      dangerouslySetInnerHTML={{ __html: contentHtml }}
+                    />
+                  )}
                 </div>
 
-                {/* Thumbs up/down for bot messages */}
+                {/* Timestamp label */}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: isUser ? "flex-end" : "flex-start",
+                    paddingLeft: isUser ? 0 : 38,
+                    paddingRight: isUser ? 38 : 0,
+                    marginBottom: showAnalysis ? 4 : 14,
+                  }}
+                >
+                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                    {isUser ? "You" : "Assistant"}{timeLabel ? ` • ${timeLabel}` : ""}
+                  </span>
+                </div>
+
+                {/* Thumbs feedback (bot only) */}
                 {!isUser && (
                   <div style={{
-                    display: "flex", gap: 2, marginLeft: 40, marginBottom: showAnalysis ? 4 : 12, marginTop: -4,
+                    display: "flex", gap: 2, paddingLeft: 38, marginBottom: showAnalysis ? 4 : 12,
                   }}>
                     {(["up", "down"] as const).map((dir) => {
                       const isSelected = feedback[i] === dir;
@@ -163,13 +250,12 @@ export default function ChatArea({
                     })}
                   </div>
                 )}
-                {/* Analysis card below last bot message */}
+
+                {/* Analysis card (domain + risk) */}
                 {showAnalysis && (
                   <div
                     className="animate-fadeUp"
-                    style={{
-                      marginLeft: 40, marginBottom: 16,
-                    }}
+                    style={{ marginBottom: 16, paddingLeft: 38 }}
                   >
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: citations ? 8 : 0 }}>
                       {domain && domain !== "—" && (
@@ -204,22 +290,12 @@ export default function ChatArea({
             );
           })}
 
-          {/* Typing */}
+          {/* Typing indicator */}
           {isLoading && messages[messages.length - 1]?.role === "user" && (
-            <div className="animate-fadeIn" style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-              <div style={{
-                width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
-                background: "linear-gradient(135deg, #D97757, #E8956A)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 13,
-              }}>
-                ⚖️
-              </div>
+            <div className="animate-fadeIn" style={{ display: "flex", marginBottom: 16 }}>
               <div
                 className="flex items-center gap-1.5"
-                style={{
-                  padding: "8px 4px",
-                }}
+                style={{ padding: "8px 4px" }}
               >
                 <span className="typing-dot" />
                 <span className="typing-dot" />
@@ -232,6 +308,15 @@ export default function ChatArea({
       )}
     </div>
   );
+}
+
+function formatTime(ts?: number): string {
+  if (!ts) return "";
+  return new Date(ts).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
 }
 
 function inlineFormat(text: string): string {
@@ -266,10 +351,25 @@ function parseTable(block: string): string {
 function renderMarkdown(text: string): string {
   if (!text) return "";
 
+  // Step 0: Extract fenced code blocks (``` ... ```) before any other processing
+  const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
+  const codePlaceholders: string[] = [];
+  let src = text.replace(codeBlockRegex, (_, lang: string, code: string) => {
+    const idx = codePlaceholders.length;
+    const escaped = code.trim()
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    codePlaceholders.push(
+      `<pre><code${lang ? ` class="language-${lang}"` : ""}>${escaped}</code></pre>`
+    );
+    return `\n\n%%CODE_${idx}%%\n\n`;
+  });
+
   // Step 1: Extract tables before other processing
   const tableRegex = /((?:^\|.+\|\s*$\n?){2,})/gm;
   const tablePlaceholders: string[] = [];
-  let src = text.replace(tableRegex, (match) => {
+  src = src.replace(tableRegex, (match) => {
     const idx = tablePlaceholders.length;
     tablePlaceholders.push(parseTable(match));
     return `\n\n%%TABLE_${idx}%%\n\n`;
@@ -417,8 +517,8 @@ function renderMarkdown(text: string): string {
     .map((b) => {
       const t = b.trim();
       if (!t) return "";
-      if (/^<(h[1-3]|ul|ol|hr|blockquote|div)/.test(t)) return t;
-      if (/^%%TABLE_\d+%%$/.test(t)) return t;
+      if (/^<(h[1-3]|ul|ol|hr|blockquote|div|pre)/.test(t)) return t;
+      if (/^%%(TABLE|CODE)_\d+%%$/.test(t)) return t;
       return `<p>${t.replace(/\n/g, "<br/>")}</p>`;
     })
     .join("");
@@ -426,8 +526,9 @@ function renderMarkdown(text: string): string {
   // Step 6: Post-process — clean up section headers wrapped in <p>
   html = html.replace(/<p>(<div class="section-header">.*?<\/div>)<\/p>/g, "$1");
 
-  // Step 7: Restore table placeholders
+  // Step 7: Restore table and code block placeholders
   html = html.replace(/%%TABLE_(\d+)%%/g, (_, idx) => tablePlaceholders[parseInt(idx)]);
+  html = html.replace(/%%CODE_(\d+)%%/g, (_, idx) => codePlaceholders[parseInt(idx)]);
 
   // Step 8: Remove commas between Thai words (not inside numbers or English)
   html = html.replace(/([\u0E00-\u0E7F]),\s*([\u0E00-\u0E7F])/g, "$1 $2");
@@ -445,7 +546,7 @@ function renderCitationsInline(citations: string): string {
     .replace(/\n/g, "<br/>");
 
   return `
-    <div style="margin-top:10px;font-size:12px;line-height:1.65;color:#71717a;">
+    <div style="margin-top:14px;padding-top:10px;border-top:1px solid rgba(0,0,0,0.07);font-size:12px;line-height:1.65;color:#71717a;">
       <strong style="font-size:11px;color:#a1a1aa;letter-spacing:0.01em;">📎 แหล่งอ้างอิง</strong><br/>
       ${html}
     </div>

@@ -14,12 +14,11 @@ export default function Home() {
   const [user, setUser] = useState<AppUser | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
 
-  // Load auth from localStorage
   useEffect(() => {
     const saved = localStorage.getItem(AUTH_KEY);
     if (saved) {
       try {
-        setUser(JSON.parse(saved));
+        setUser(JSON.parse(saved) as AppUser);
       } catch {
         localStorage.removeItem(AUTH_KEY);
       }
@@ -78,20 +77,20 @@ function ChatApp({ user, onLogout }: { user: AppUser; onLogout: () => void }) {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const currentSessionRef = useRef<string | null>(null);
 
-  // Load theme from localStorage on mount
+  // Load saved theme on mount and apply to DOM
   useEffect(() => {
-    const saved = localStorage.getItem("thai-law-theme") as "light" | "dark" | null;
-    if (saved) setTheme(saved);
+    const saved = (localStorage.getItem("thai-law-theme") as "light" | "dark") || "light";
+    if (saved !== "light") setTheme(saved);
+    document.documentElement.setAttribute("data-theme", saved);
   }, []);
 
-  // Apply theme to <html> element
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem("thai-law-theme", theme);
-  }, [theme]);
-
   const toggleTheme = useCallback(() => {
-    setTheme((prev) => (prev === "light" ? "dark" : "light"));
+    setTheme((prev) => {
+      const next = prev === "light" ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", next);
+      localStorage.setItem("thai-law-theme", next);
+      return next;
+    });
   }, []);
 
   const handleFeedback = useCallback((index: number, value: "up" | "down") => {
@@ -195,17 +194,18 @@ function ChatApp({ user, onLogout }: { user: AppUser; onLogout: () => void }) {
         currentSessionRef.current = sessionId;
       }
 
-      const userMsg: ChatMessage = { role: "user", content: text };
+      const userMsg: ChatMessage = { role: "user", content: text, timestamp: Date.now() };
       const updatedMessages = [...messages, userMsg];
       setMessages(updatedMessages);
       setIsLoading(true);
 
-      const history = messages.map((m) => ({
+      // Keep last 12 messages (6 user+assistant pairs) — matches backend MAX_HISTORY_TURNS
+      const history = messages.slice(-12).map((m) => ({
         role: m.role as "user" | "assistant",
         content: m.content,
       }));
 
-      const assistantMsg: ChatMessage = { role: "assistant", content: "" };
+      const assistantMsg: ChatMessage = { role: "assistant", content: "", timestamp: Date.now() };
       setMessages([...updatedMessages, assistantMsg]);
 
       const sid = sessionId;

@@ -66,7 +66,7 @@ export default function Sidebar({
         borderRight: "1px solid rgba(255,255,255,0.06)",
       }}
     >
-      {/* ── Header ── */}
+      {/* Header */}
       <div style={{ padding: "20px 18px 16px" }}>
         <div className="flex items-center gap-2.5" style={{ marginBottom: 14 }}>
           <div
@@ -115,7 +115,7 @@ export default function Sidebar({
         </button>
       </div>
 
-      {/* ── Scrollable body ── */}
+      {/* Scrollable body */}
       <div className="flex-1 overflow-y-auto" style={{ padding: "0 12px 12px" }}>
         {/* Search */}
         {sessions.length > 0 && (
@@ -256,7 +256,7 @@ export default function Sidebar({
         )}
       </div>
 
-      {/* ── Footer ── */}
+      {/* Footer */}
       <div style={{
         padding: "10px 16px 16px",
         borderTop: "1px solid rgba(255,255,255,0.06)",
@@ -356,8 +356,8 @@ export default function Sidebar({
               { label: "Model", value: "Typhoon v2.5-30B" },
               { label: "Embedding", value: "BGE-M3" },
               { label: "Reranker", value: "BGE-Reranker-v2-M3" },
-              { label: "Vector DB", value: "ChromaDB (1,042 docs)" },
-              { label: "กฎหมาย", value: "860 รายการ" },
+              { label: "Vector DB", value: "ChromaDB (32,962 docs)" },
+              { label: "กฎหมาย", value: "32,887 รายการ" },
               { label: "Version", value: "1.0.0" },
             ].map((item) => (
               <div key={item.label} style={{ display: "flex", justifyContent: "space-between", padding: "1px 0" }}>

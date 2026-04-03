@@ -3,6 +3,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  timestamp?: number;
 }
 
 export interface ChatStreamData {
@@ -136,6 +137,15 @@ export interface AnalyticsBootstrapResult {
  - Calls onData for each partial update, onDone when finished.
 */
 
+const STREAM_TIMEOUT_MS = 90_000;  // 90 seconds
+const FETCH_TIMEOUT_MS  = 30_000;  // 30 seconds
+
+function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(id));
+}
+
 export async function streamChat(
   message: string,
   history: ChatMessage[],
@@ -143,11 +153,15 @@ export async function streamChat(
   onDone: () => void,
   onError: (err: string) => void
 ) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
+
   try {
     const res = await fetch(`${API_BASE}/api/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, history }),
+      signal: controller.signal,
     });
 
     if (!res.ok) {
@@ -193,7 +207,47 @@ export async function streamChat(
     }
     onDone();
   } catch (err) {
-    onError(err instanceof Error ? err.message : "Unknown error");
+    if (err instanceof Error && err.name === "AbortError") {
+      onError("หมดเวลาการเชื่อมต่อ (90 วินาที) กรุณาลองใหม่อีกครั้ง");
+    } else {
+      onError(err instanceof Error ? err.message : "Unknown error");
+    }
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// Auth API
+
+export async function sendAuthCode(email: string): Promise<void> {
+  const res = await fetchWithTimeout(
+    `${API_BASE}/api/auth/send-code`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    },
+    FETCH_TIMEOUT_MS,
+  );
+  if (!res.ok) {
+    const data = await res.json().catch(() => null) as { detail?: string } | null;
+    throw new Error(data?.detail || "ไม่สามารถส่งอีเมลได้");
+  }
+}
+
+export async function verifyAuthCode(email: string, code: string): Promise<void> {
+  const res = await fetchWithTimeout(
+    `${API_BASE}/api/auth/verify-code`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, code }),
+    },
+    FETCH_TIMEOUT_MS,
+  );
+  if (!res.ok) {
+    const data = await res.json().catch(() => null) as { detail?: string } | null;
+    throw new Error(data?.detail || "รหัสไม่ถูกต้อง");
   }
 }
 
@@ -201,7 +255,7 @@ export async function streamChat(
 
 export async function checkHealth(): Promise<boolean> {
   try {
-    const res = await fetch(`${API_BASE}/api/health`);
+    const res = await fetchWithTimeout(`${API_BASE}/api/health`, {}, FETCH_TIMEOUT_MS);
     return res.ok;
   } catch {
     return false;
@@ -210,19 +264,23 @@ export async function checkHealth(): Promise<boolean> {
 
 export async function logAnalyticsEvent(payload: AnalyticsEventPayload): Promise<void> {
   try {
-    await fetch(`${API_BASE}/api/analytics/event`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        event_type: payload.eventType,
-        user_email: payload.userEmail,
-        session_id: payload.sessionId,
-        message_length: payload.messageLength,
-        message_text: payload.messageText,
-        topic: payload.topic,
-        metadata: payload.metadata || {},
-      }),
-    });
+    await fetchWithTimeout(
+      `${API_BASE}/api/analytics/event`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event_type: payload.eventType,
+          user_email: payload.userEmail,
+          session_id: payload.sessionId,
+          message_length: payload.messageLength,
+          message_text: payload.messageText,
+          topic: payload.topic,
+          metadata: payload.metadata || {},
+        }),
+      },
+      FETCH_TIMEOUT_MS,
+    );
   } catch {
     // fire-and-forget analytics
   }
@@ -230,16 +288,20 @@ export async function logAnalyticsEvent(payload: AnalyticsEventPayload): Promise
 
 function buildAdminHeaders(adminKey?: string): HeadersInit {
   if (!adminKey) return {};
-  return { "x-analytics-key": adminKey };
+  // HTTP headers must be ISO-8859-1; encode any non-ASCII characters via encodeURIComponent.
+  const safeKey = encodeURIComponent(adminKey);
+  return { "x-analytics-key": safeKey };
 }
 
 export async function fetchAnalyticsSummary(
   days: number = 30,
   adminKey?: string
 ): Promise<AnalyticsSummary> {
-  const res = await fetch(`${API_BASE}/api/analytics/summary?days=${days}`, {
-    headers: buildAdminHeaders(adminKey),
-  });
+  const res = await fetchWithTimeout(
+    `${API_BASE}/api/analytics/summary?days=${days}`,
+    { headers: buildAdminHeaders(adminKey) },
+    FETCH_TIMEOUT_MS,
+  );
   if (!res.ok) {
     throw new Error(`Failed to fetch summary: ${res.status}`);
   }
@@ -251,9 +313,11 @@ export async function fetchAnalyticsUsers(
   limit: number = 25,
   adminKey?: string
 ): Promise<AnalyticsUserInsight[]> {
-  const res = await fetch(`${API_BASE}/api/analytics/users?days=${days}&limit=${limit}`, {
-    headers: buildAdminHeaders(adminKey),
-  });
+  const res = await fetchWithTimeout(
+    `${API_BASE}/api/analytics/users?days=${days}&limit=${limit}`,
+    { headers: buildAdminHeaders(adminKey) },
+    FETCH_TIMEOUT_MS,
+  );
   if (!res.ok) {
     throw new Error(`Failed to fetch users: ${res.status}`);
   }
@@ -282,23 +346,27 @@ export async function exportAnalyticsTrainingRows(
     | AnalyticsInstructionAlpacaRow[];
   content?: string;
 }> {
-  const res = await fetch(`${API_BASE}/api/analytics/export`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...buildAdminHeaders(adminKey),
+  const res = await fetchWithTimeout(
+    `${API_BASE}/api/analytics/export`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...buildAdminHeaders(adminKey),
+      },
+      body: JSON.stringify({
+        days,
+        limit,
+        format,
+        dataset,
+        style,
+        topic: filters?.topic || undefined,
+        domain: filters?.domain || undefined,
+        risk: filters?.risk || undefined,
+      }),
     },
-    body: JSON.stringify({
-      days,
-      limit,
-      format,
-      dataset,
-      style,
-      topic: filters?.topic || undefined,
-      domain: filters?.domain || undefined,
-      risk: filters?.risk || undefined,
-    }),
-  });
+    FETCH_TIMEOUT_MS,
+  );
 
   if (!res.ok) {
     throw new Error(`Failed to export training rows: ${res.status}`);
@@ -313,21 +381,25 @@ export async function runAnalyticsSnapshotExport(
   group: "real" | "samples" = "real",
   adminKey?: string
 ): Promise<AnalyticsSnapshotResult> {
-  const res = await fetch(`${API_BASE}/api/analytics/export/snapshot`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...buildAdminHeaders(adminKey),
+  const res = await fetchWithTimeout(
+    `${API_BASE}/api/analytics/export/snapshot`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...buildAdminHeaders(adminKey),
+      },
+      body: JSON.stringify({
+        days,
+        limit,
+        topic: filters.topic || undefined,
+        domain: filters.domain || undefined,
+        risk: filters.risk || undefined,
+        group,
+      }),
     },
-    body: JSON.stringify({
-      days,
-      limit,
-      topic: filters.topic || undefined,
-      domain: filters.domain || undefined,
-      risk: filters.risk || undefined,
-      group,
-    }),
-  });
+    FETCH_TIMEOUT_MS,
+  );
 
   if (!res.ok) {
     throw new Error(`Failed to run snapshot export: ${res.status}`);
@@ -339,14 +411,18 @@ export async function runAnalyticsGenerateSamples(
   count: number,
   adminKey?: string
 ): Promise<AnalyticsGenerateSampleResult> {
-  const res = await fetch(`${API_BASE}/api/analytics/generate-samples`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...buildAdminHeaders(adminKey),
+  const res = await fetchWithTimeout(
+    `${API_BASE}/api/analytics/generate-samples`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...buildAdminHeaders(adminKey),
+      },
+      body: JSON.stringify({ count }),
     },
-    body: JSON.stringify({ count }),
-  });
+    FETCH_TIMEOUT_MS,
+  );
 
   if (!res.ok) {
     throw new Error(`Failed to generate sample conversations: ${res.status}`);
@@ -361,21 +437,25 @@ export async function runAnalyticsBootstrapTrainingData(
   filters: AnalyticsExportFilters,
   adminKey?: string
 ): Promise<AnalyticsBootstrapResult> {
-  const res = await fetch(`${API_BASE}/api/analytics/bootstrap-training-data`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...buildAdminHeaders(adminKey),
+  const res = await fetchWithTimeout(
+    `${API_BASE}/api/analytics/bootstrap-training-data`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...buildAdminHeaders(adminKey),
+      },
+      body: JSON.stringify({
+        sample_count: sampleCount,
+        days,
+        limit,
+        topic: filters.topic || undefined,
+        domain: filters.domain || undefined,
+        risk: filters.risk || undefined,
+      }),
     },
-    body: JSON.stringify({
-      sample_count: sampleCount,
-      days,
-      limit,
-      topic: filters.topic || undefined,
-      domain: filters.domain || undefined,
-      risk: filters.risk || undefined,
-    }),
-  });
+    FETCH_TIMEOUT_MS,
+  );
 
   if (!res.ok) {
     throw new Error(`Failed to bootstrap training data: ${res.status}`);

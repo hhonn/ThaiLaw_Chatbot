@@ -14,6 +14,28 @@ import {
 const ANALYTICS_KEY_STORAGE = "thai-law-analytics-admin-key";
 const DAY_OPTIONS = [7, 30, 90];
 
+type ExportTab = "export" | "snapshot";
+
+const KPI_ACCENT: Record<string, string> = {
+  blue:   styles.kpiAccentBlue,
+  orange: styles.kpiAccentOrange,
+  purple: styles.kpiAccentPurple,
+  green:  styles.kpiAccentGreen,
+  teal:   styles.kpiAccentTeal,
+  amber:  styles.kpiAccentAmber,
+  slate:  styles.kpiAccentSlate,
+};
+
+const EXPORT_BTN_VARIANT: Record<string, string> = {
+  neutral: styles.exportBtnNeutral,
+  warm:    styles.exportBtnWarm,
+  green:   styles.exportBtnGreen,
+  blue:    styles.exportBtnBlue,
+  cyan:    styles.exportBtnCyan,
+  amber:   styles.exportBtnAmber,
+  teal:    styles.exportBtnTeal,
+};
+
 export default function AnalyticsPage() {
   const [days, setDays] = useState(30);
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
@@ -21,7 +43,7 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [adminKey, setAdminKey] = useState("");
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [snapshotting, setSnapshotting] = useState(false);
   const [topicFilter, setTopicFilter] = useState("");
@@ -31,6 +53,8 @@ export default function AnalyticsPage() {
   const [snapshotResult, setSnapshotResult] = useState("");
   const [userQuery, setUserQuery] = useState("");
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
+  const [exportTab, setExportTab] = useState<ExportTab>("export");
+  const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
     const saved = localStorage.getItem(ANALYTICS_KEY_STORAGE);
@@ -54,7 +78,6 @@ export default function AnalyticsPage() {
         setLoading(false);
         return;
       }
-
       try {
         const [s, u] = await Promise.all([
           fetchAnalyticsSummary(days, adminKey),
@@ -67,21 +90,15 @@ export default function AnalyticsPage() {
       } catch (err) {
         if (!alive) return;
         const message = err instanceof Error ? err.message : "Failed to load analytics";
-        if (message.includes("401")) {
-          setError("Analytics Admin Key ไม่ถูกต้อง หรือยังไม่ได้กรอกคีย์");
-        } else {
-          setError(message);
-        }
+        setError(message.includes("401") ? "Admin Key ไม่ถูกต้อง — กรุณาตรวจสอบและลองใหม่" : message);
       } finally {
         if (alive) setLoading(false);
       }
     }
 
     void load();
-    return () => {
-      alive = false;
-    };
-  }, [days, adminKey]);
+    return () => { alive = false; };
+  }, [days, adminKey, refreshToken]);
 
   const totalUpvotes = useMemo(() => users.reduce((sum, u) => sum + u.upvotes, 0), [users]);
   const totalDownvotes = useMemo(() => users.reduce((sum, u) => sum + u.downvotes, 0), [users]);
@@ -103,42 +120,34 @@ export default function AnalyticsPage() {
   const keyReady = adminKey.trim().length > 0;
 
   const handleExport = async (
+    label: string,
     format: "json" | "jsonl",
     dataset: "questions" | "pairs" | "instruction",
     style: "native" | "chatml" | "alpaca" = "native"
   ) => {
-    setExporting(true);
+    setExporting(label);
     setError("");
     try {
       const result = await exportAnalyticsTrainingRows(
-        days,
-        2000,
-        format,
-        dataset,
-        style,
-        {
-          topic: topicFilter,
-          domain: domainFilter,
-          risk: riskFilter,
-        },
+        days, 2000, format, dataset, style,
+        { topic: topicFilter, domain: domainFilter, risk: riskFilter },
         adminKey
       );
       const blob =
         format === "json"
           ? new Blob([JSON.stringify(result.rows || [], null, 2)], { type: "application/json;charset=utf-8" })
           : new Blob([result.content || ""], { type: "application/x-ndjson;charset=utf-8" });
-
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       const styleSuffix = dataset === "instruction" ? `-${style}` : "";
-      a.download = `lawbot-training-${dataset}${styleSuffix}-${days}d.${format === "json" ? "json" : "jsonl"}`;
+      a.download = `lawbot-${dataset}${styleSuffix}-${days}d.${format === "json" ? "json" : "jsonl"}`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Export failed");
     } finally {
-      setExporting(false);
+      setExporting(null);
     }
   };
 
@@ -147,16 +156,8 @@ export default function AnalyticsPage() {
     setError("");
     try {
       const result = await exportAnalyticsTrainingRows(
-        days,
-        20,
-        "json",
-        "instruction",
-        "chatml",
-        {
-          topic: topicFilter,
-          domain: domainFilter,
-          risk: riskFilter,
-        },
+        days, 20, "json", "instruction", "chatml",
+        { topic: topicFilter, domain: domainFilter, risk: riskFilter },
         adminKey
       );
       setPreviewJson(JSON.stringify(result.rows || [], null, 2));
@@ -173,22 +174,15 @@ export default function AnalyticsPage() {
     setSnapshotResult("");
     try {
       const result = await runAnalyticsSnapshotExport(
-        days,
-        3000,
-        {
-          topic: topicFilter,
-          domain: domainFilter,
-          risk: riskFilter,
-        },
+        days, 3000,
+        { topic: topicFilter, domain: domainFilter, risk: riskFilter },
         "real",
         adminKey
       );
       const lines = [
         `Folder: ${result.base_dir}`,
-        result.deleted_old_files && result.deleted_old_files.length > 0
-          ? `Deleted old files: ${result.deleted_old_files.length}`
-          : "Deleted old files: 0",
-        ...result.files.map((f) => `${f.name} (${f.count} rows)`),
+        `Deleted old: ${result.deleted_old_files?.length ?? 0} file(s)`,
+        ...result.files.map((f) => `  ${f.name}  —  ${f.count} rows`),
       ];
       setSnapshotResult(lines.join("\n"));
     } catch (err) {
@@ -200,351 +194,362 @@ export default function AnalyticsPage() {
 
   return (
     <main className={styles.page}>
-      <div className={styles.bgOrbOne} />
-      <div className={styles.bgOrbTwo} />
+      <div className={styles.bgGradient} />
       <div className={styles.container}>
+
+        {/* Header */}
         <header className={styles.header}>
-          <div>
-            <h1 className={styles.title}>Analytics Dashboard</h1>
-            <p className={styles.subtitle}>
-              สรุปพฤติกรรมผู้ใช้งานแบบ anonymized เพื่อใช้ปรับปรุงโมเดลและระบบตอบคำถาม
-            </p>
+          <div className={styles.headerLeft}>
+            <h1 className={styles.title}>Analytics</h1>
+            <p className={styles.subtitle}>สรุปพฤติกรรมผู้ใช้งาน (anonymized) สำหรับปรับปรุงระบบ</p>
           </div>
-          <div className={styles.headerMeta}>
-            <span className={`${styles.badge} ${keyReady ? styles.badgeReady : styles.badgeMissing}`}>
-              {keyReady ? "Admin Key Ready" : "Missing Admin Key"}
-            </span>
-            <span className={styles.badge}>
-              {lastLoadedAt ? `Updated ${new Date(lastLoadedAt).toLocaleTimeString("th-TH")}` : "ยังไม่โหลดข้อมูล"}
-            </span>
-          </div>
-        </header>
-
-        <section className={styles.panel}>
-          <div className={styles.sectionTitleRow}>
-            <h2 className={styles.sectionTitle}>Control Center</h2>
-            <button
-              onClick={() => setAdminKey("")}
-              className={styles.ghostButton}
-              disabled={!adminKey}
-            >
-              Clear Key
-            </button>
-          </div>
-
-          <div className={styles.gridTwoCols}>
-            <label className={styles.fieldGroup}>
-              <span className={styles.fieldLabel}>Analytics Admin Key</span>
+          <div className={styles.headerControls}>
+            <div className={styles.keyInput}>
+              <span className={styles.keyIcon}>🔑</span>
               <input
                 type="password"
                 value={adminKey}
                 onChange={(e) => setAdminKey(e.target.value)}
-                placeholder="กรอก Analytics Admin Key"
-                className={styles.input}
+                placeholder="Admin Key"
+                className={styles.keyField}
               />
-            </label>
-
-            <div className={styles.fieldGroup}>
-              <span className={styles.fieldLabel}>ช่วงเวลาวิเคราะห์</span>
-              <div className={styles.segmentWrap}>
-                {DAY_OPTIONS.map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => setDays(d)}
-                    className={`${styles.segmentButton} ${days === d ? styles.segmentButtonActive : ""}`}
-                  >
-                    {d} วัน
-                  </button>
-                ))}
-              </div>
+              {adminKey && (
+                <button onClick={() => setAdminKey("")} className={styles.keyClear} title="Clear key">✕</button>
+              )}
             </div>
+            <div className={styles.dayTabs}>
+              {DAY_OPTIONS.map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setDays(d)}
+                  className={`${styles.dayTab} ${days === d ? styles.dayTabActive : ""}`}
+                >
+                  {d}d
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setRefreshToken((t) => t + 1)}
+              disabled={loading || !keyReady}
+              className={styles.refreshButton}
+              title="Refresh"
+            >
+              {loading ? "⏳" : "↻"}
+            </button>
           </div>
+        </header>
 
-          <div className={styles.gridThreeCols}>
-            <label className={styles.fieldGroup}>
-              <span className={styles.fieldLabel}>Filter Topic</span>
-              <input
-                value={topicFilter}
-                onChange={(e) => setTopicFilter(e.target.value)}
-                placeholder="เช่น อาญา"
-                className={styles.input}
-              />
-            </label>
-            <label className={styles.fieldGroup}>
-              <span className={styles.fieldLabel}>Filter Domain</span>
-              <input
-                value={domainFilter}
-                onChange={(e) => setDomainFilter(e.target.value)}
-                placeholder="เช่น กฎหมายแรงงาน"
-                className={styles.input}
-              />
-            </label>
-            <label className={styles.fieldGroup}>
-              <span className={styles.fieldLabel}>Filter Risk</span>
-              <input
-                value={riskFilter}
-                onChange={(e) => setRiskFilter(e.target.value)}
-                placeholder="เช่น medium"
-                className={styles.input}
-              />
-            </label>
+        {/* Status bar */}
+        <div className={styles.statusBar}>
+          <span className={`${styles.statusDot} ${keyReady ? styles.statusDotOn : styles.statusDotOff}`} />
+          <span className={styles.statusText}>{keyReady ? "Admin key set" : "No admin key"}</span>
+          {lastLoadedAt && (
+            <>
+              <span className={styles.statusSep}>·</span>
+              <span className={styles.statusText}>Updated {new Date(lastLoadedAt).toLocaleTimeString("th-TH")}</span>
+            </>
+          )}
+          {loading && (
+            <>
+              <span className={styles.statusSep}>·</span>
+              <span className={styles.statusText}>กำลังโหลด...</span>
+            </>
+          )}
+        </div>
+
+        {/* Error */}
+        {error && (
+          <div className={styles.errorBanner}>
+            <span>⚠️</span>
+            <span>{error}</span>
+            <button onClick={() => setError("")} className={styles.errorDismiss}>✕</button>
           </div>
-        </section>
-
-        <section className={styles.panel}>
-          <h2 className={styles.sectionTitle}>Training Data Actions</h2>
-          <div className={styles.actionGrid}>
-            <ActionBlock title="Export Datasets" description="ดาวน์โหลดข้อมูลสำหรับ train/retrain ตามฟอร์แมตที่ต้องการ">
-              <div className={styles.actionButtonWrap}>
-                <button
-                  onClick={() => void handleExport("json", "questions")}
-                  disabled={exporting || !keyReady}
-                  className={`${styles.button} ${styles.buttonNeutral}`}
-                >
-                  {exporting ? "กำลัง export..." : "Questions JSON"}
-                </button>
-                <button
-                  onClick={() => void handleExport("jsonl", "questions")}
-                  disabled={exporting || !keyReady}
-                  className={`${styles.button} ${styles.buttonWarm}`}
-                >
-                  Questions JSONL
-                </button>
-                <button
-                  onClick={() => void handleExport("jsonl", "pairs")}
-                  disabled={exporting || !keyReady}
-                  className={`${styles.button} ${styles.buttonGreen}`}
-                >
-                  Q-A Pairs JSONL
-                </button>
-                <button
-                  onClick={() => void handleExport("jsonl", "instruction")}
-                  disabled={exporting || !keyReady}
-                  className={`${styles.button} ${styles.buttonBlue}`}
-                >
-                  Instruction JSONL
-                </button>
-                <button
-                  onClick={() => void handleExport("jsonl", "instruction", "chatml")}
-                  disabled={exporting || !keyReady}
-                  className={`${styles.button} ${styles.buttonCyan}`}
-                >
-                  ChatML JSONL
-                </button>
-                <button
-                  onClick={() => void handleExport("jsonl", "instruction", "alpaca")}
-                  disabled={exporting || !keyReady}
-                  className={`${styles.button} ${styles.buttonAmber}`}
-                >
-                  Alpaca JSONL
-                </button>
-              </div>
-            </ActionBlock>
-
-            <ActionBlock title="Preview & Snapshot" description="เช็กตัวอย่างข้อมูลและสร้าง snapshot จากข้อมูลผู้ใช้จริงเท่านั้น">
-              <div className={styles.actionButtonWrap}>
-                <button
-                  onClick={() => void handlePreview()}
-                  disabled={previewing || !keyReady}
-                  className={`${styles.button} ${styles.buttonTeal}`}
-                >
-                  {previewing ? "กำลัง preview..." : "Preview 20 (ChatML)"}
-                </button>
-                <div className={styles.realOnlyNote}>Snapshot Group: Real (fixed)</div>
-                <button
-                  onClick={() => void handleSnapshotExport()}
-                  disabled={snapshotting || !keyReady}
-                  className={`${styles.button} ${styles.buttonRoyal}`}
-                >
-                  {snapshotting ? "กำลังสร้าง snapshot..." : "Create Snapshot Files"}
-                </button>
-              </div>
-            </ActionBlock>
-          </div>
-        </section>
-
-        {snapshotResult && (
-          <section className={styles.panel}>
-            <h2 className={styles.sectionTitle}>Snapshot Result</h2>
-            <textarea readOnly value={snapshotResult} className={styles.console} />
-          </section>
         )}
 
-        {previewJson && (
-          <section className={styles.panel}>
-            <h2 className={styles.sectionTitle}>Preview JSON</h2>
-            <textarea readOnly value={previewJson} className={`${styles.console} ${styles.consoleLarge}`} />
-          </section>
+        {/* Empty state */}
+        {!keyReady && !loading && (
+          <div className={styles.emptyState}>
+            <div className={styles.emptyIcon}>🔒</div>
+            <div className={styles.emptyTitle}>ใส่ Admin Key เพื่อดูข้อมูล</div>
+            <div className={styles.emptyHint}>กรอก analytics admin key ในช่องด้านบนเพื่อโหลดข้อมูล dashboard</div>
+          </div>
         )}
 
-        {loading && <p className={styles.infoLine}>กำลังโหลดข้อมูล...</p>}
-        {!loading && !adminKey.trim() && (
-          <p className={`${styles.infoLine} ${styles.warnLine}`}>กรุณากรอก Analytics Admin Key เพื่อโหลดข้อมูลสรุป</p>
+        {/* Skeleton */}
+        {loading && keyReady && (
+          <div className={styles.skeletonWrap}>
+            <div className={styles.skeletonGrid}>
+              {Array.from({ length: 6 }).map((_, i) => <div key={i} className={styles.skeletonCard} />)}
+            </div>
+            <div className={styles.skeletonBlock} />
+            <div className={styles.skeletonBlock} style={{ height: "160px" }} />
+          </div>
         )}
-        {error && <p className={`${styles.infoLine} ${styles.errorLine}`}>เกิดข้อผิดพลาด: {error}</p>}
 
+        {/* Main data */}
         {!loading && !error && summary && (
           <>
-            <section className={styles.statGrid}>
-              <StatCard label="Events" value={formatNumber(summary.total_events)} />
-              <StatCard label="Unique Users" value={formatNumber(summary.unique_users)} />
-              <StatCard label="Avg Events/User" value={summary.behavior.avg_events_per_user.toFixed(2)} />
-              <StatCard label="Avg Questions/User" value={summary.behavior.avg_questions_per_user.toFixed(2)} />
-              <StatCard label="Total Questions" value={formatNumber(totalQuestions)} />
-              <StatCard
+            {/* KPI row */}
+            <div className={styles.kpiGrid}>
+              <KpiCard icon="👥" label="Unique Users"      value={formatNumber(summary.unique_users)}                          accent="blue"   />
+              <KpiCard icon="💬" label="Total Events"      value={formatNumber(summary.total_events)}                          accent="orange" />
+              <KpiCard icon="❓" label="Questions Asked"   value={formatNumber(totalQuestions)}                                accent="purple" />
+              <KpiCard
+                icon="👍"
                 label="Positive Feedback"
-                value={positiveRate === null ? "-" : `${positiveRate.toFixed(1)}%`}
-                hint={`up ${formatNumber(totalUpvotes)} / down ${formatNumber(totalDownvotes)}`}
+                value={positiveRate === null ? "—" : `${positiveRate.toFixed(1)}%`}
+                accent={positiveRate !== null && positiveRate >= 70 ? "green" : "amber"}
+                hint={feedbackTotal > 0 ? `${formatNumber(totalUpvotes)} ↑  ${formatNumber(totalDownvotes)} ↓` : "ยังไม่มี feedback"}
               />
-            </section>
+              <KpiCard icon="📈" label="Events / User"    value={summary.behavior.avg_events_per_user.toFixed(1)}             accent="teal"   />
+              <KpiCard icon="🙋" label="Active Users"     value={String(activeQuestionUsers)} hint={`ในช่วง ${days} วันที่ผ่านมา`} accent="slate"  />
+            </div>
 
-            <section className={styles.panelGrid}>
-              <Panel title="Event Types">
-                <SimpleTable
-                  headers={["ประเภท Event", "จำนวน", "สัดส่วน"]}
-                  rows={summary.events_by_type.map((e) => [
-                    e.event_type,
-                    formatNumber(e.count),
-                    <MiniBar
-                      key={e.event_type}
-                      value={e.count}
-                      max={Math.max(...summary.events_by_type.map((x) => x.count), 1)}
-                    />,
-                  ])}
+            {/* Charts */}
+            <div className={styles.chartsRow}>
+              <section className={styles.chartPanel}>
+                <h2 className={styles.panelTitle}>หัวข้อกฎหมายยอดนิยม</h2>
+                <BarChart
+                  items={summary.topics.slice(0, 8).map((t) => ({ label: t.topic, value: t.count }))}
+                  colorClass={styles.barFillOrange}
+                  emptyText="ไม่มีข้อมูล topic"
                 />
-              </Panel>
-              <Panel title="Top Legal Topics">
-                <SimpleTable
-                  headers={["หัวข้อกฎหมาย", "จำนวนคำถาม", "สัดส่วน"]}
-                  rows={summary.topics.map((t) => [
-                    t.topic,
-                    formatNumber(t.count),
-                    <MiniBar
-                      key={t.topic}
-                      value={t.count}
-                      max={Math.max(...summary.topics.map((x) => x.count), 1)}
-                    />,
-                  ])}
+              </section>
+              <section className={styles.chartPanel}>
+                <h2 className={styles.panelTitle}>Event Breakdown</h2>
+                <BarChart
+                  items={summary.events_by_type.map((e) => ({ label: e.event_type, value: e.count }))}
+                  colorClass={styles.barFillBlue}
+                  emptyText="ไม่มีข้อมูล event"
                 />
-              </Panel>
-            </section>
+              </section>
+            </div>
 
+            {/* User table */}
             <section className={styles.panel}>
-              <div className={styles.sectionTitleRow}>
-                <h2 className={styles.sectionTitle}>User Behavior (Hashed IDs)</h2>
-                <div className={styles.inlineStats}>
-                  <span className={styles.inlineStat}>Active users with questions: {activeQuestionUsers}</span>
-                  <span className={styles.inlineStat}>Showing: {filteredUsers.length}</span>
+              <div className={styles.panelHeader}>
+                <h2 className={styles.panelTitle}>User Insights</h2>
+                <div className={styles.panelActions}>
+                  <input
+                    value={userQuery}
+                    onChange={(e) => setUserQuery(e.target.value)}
+                    placeholder="ค้นหา user / topic"
+                    className={styles.searchInput}
+                  />
+                  <span className={styles.resultCount}>{filteredUsers.length} users</span>
                 </div>
               </div>
-
-              <label className={styles.fieldGroup}>
-                <span className={styles.fieldLabel}>Search User Hash / Topic</span>
-                <input
-                  value={userQuery}
-                  onChange={(e) => setUserQuery(e.target.value)}
-                  placeholder="พิมพ์เพื่อค้นหา user hash หรือหัวข้อ"
-                  className={styles.input}
-                />
-              </label>
-
-              <SimpleTable
-                headers={["User Hash", "Events", "Questions", "Top Topic", "Up", "Down", "Last Active"]}
-                rows={filteredUsers.map((u) => [
-                  `${u.user_hash.slice(0, 12)}...`,
-                  formatNumber(u.total_events),
-                  formatNumber(u.questions),
-                  u.top_topic,
-                  formatNumber(u.upvotes),
-                  formatNumber(u.downvotes),
-                  new Date(u.last_active_ts).toLocaleString("th-TH"),
-                ])}
-              />
+              <div className={styles.tableScroll}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>User (hashed)</th>
+                      <th className={styles.numCol}>Events</th>
+                      <th className={styles.numCol}>Questions</th>
+                      <th>Top Topic</th>
+                      <th className={styles.numCol}>👍</th>
+                      <th className={styles.numCol}>👎</th>
+                      <th>Last Active</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredUsers.map((u) => (
+                      <tr key={u.user_hash}>
+                        <td className={styles.hashCell}><code>{u.user_hash.slice(0, 14)}…</code></td>
+                        <td className={styles.numCell}>{formatNumber(u.total_events)}</td>
+                        <td className={styles.numCell}>{formatNumber(u.questions)}</td>
+                        <td>
+                          {u.top_topic
+                            ? <span className={styles.topicChip}>{u.top_topic}</span>
+                            : <span className={styles.dimText}>—</span>}
+                        </td>
+                        <td className={styles.numCell}><span className={styles.upVote}>{formatNumber(u.upvotes)}</span></td>
+                        <td className={styles.numCell}><span className={styles.downVote}>{formatNumber(u.downvotes)}</span></td>
+                        <td className={styles.timeCell}>{new Date(u.last_active_ts).toLocaleDateString("th-TH")}</td>
+                      </tr>
+                    ))}
+                    {filteredUsers.length === 0 && (
+                      <tr><td colSpan={7} className={styles.emptyRow}>ไม่พบผู้ใช้ตามเงื่อนไขที่กรอง</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </section>
           </>
         )}
+
+        {/* Training Data Tools */}
+        {keyReady && (
+          <section className={`${styles.panel} ${styles.toolsPanel}`}>
+            <div className={styles.panelHeader}>
+              <h2 className={styles.panelTitle}>Training Data Tools</h2>
+              <div className={styles.tabRow}>
+                <button
+                  onClick={() => setExportTab("export")}
+                  className={`${styles.tab} ${exportTab === "export" ? styles.tabActive : ""}`}
+                >
+                  Export Datasets
+                </button>
+                <button
+                  onClick={() => setExportTab("snapshot")}
+                  className={`${styles.tab} ${exportTab === "snapshot" ? styles.tabActive : ""}`}
+                >
+                  Snapshot
+                </button>
+              </div>
+            </div>
+
+            {/* Shared filters */}
+            <div className={styles.filterRow}>
+              <FilterField label="Topic"  value={topicFilter}  onChange={setTopicFilter}  placeholder="เช่น อาญา" />
+              <FilterField label="Domain" value={domainFilter} onChange={setDomainFilter} placeholder="เช่น กฎหมายแรงงาน" />
+              <FilterField label="Risk"   value={riskFilter}   onChange={setRiskFilter}   placeholder="เช่น medium" />
+              <div className={styles.windowBadge}>
+                <span className={styles.filterLabel}>Window</span>
+                <span className={styles.windowValue}>{days} วัน</span>
+              </div>
+            </div>
+
+            {exportTab === "export" && (
+              <div className={styles.exportGrid}>
+                <ExportGroup title="Questions">
+                  <ExportButton label="JSON"  id="q-json"  onClick={() => void handleExport("q-json",  "json",  "questions")} exporting={exporting} variant="neutral" />
+                  <ExportButton label="JSONL" id="q-jsonl" onClick={() => void handleExport("q-jsonl", "jsonl", "questions")} exporting={exporting} variant="warm"    />
+                </ExportGroup>
+                <ExportGroup title="Q-A Pairs">
+                  <ExportButton label="JSONL" id="pairs" onClick={() => void handleExport("pairs", "jsonl", "pairs")} exporting={exporting} variant="green" />
+                </ExportGroup>
+                <ExportGroup title="Instruction">
+                  <ExportButton label="Native" id="inst-native" onClick={() => void handleExport("inst-native", "jsonl", "instruction", "native")} exporting={exporting} variant="blue"  />
+                  <ExportButton label="ChatML" id="inst-chatml" onClick={() => void handleExport("inst-chatml", "jsonl", "instruction", "chatml")} exporting={exporting} variant="cyan"  />
+                  <ExportButton label="Alpaca" id="inst-alpaca" onClick={() => void handleExport("inst-alpaca", "jsonl", "instruction", "alpaca")} exporting={exporting} variant="amber" />
+                </ExportGroup>
+                <ExportGroup title="Preview">
+                  <ExportButton
+                    label={previewing ? "Loading…" : "Preview ChatML (20)"}
+                    id="preview"
+                    onClick={() => void handlePreview()}
+                    exporting={previewing ? "preview" : null}
+                    variant="teal"
+                  />
+                </ExportGroup>
+              </div>
+            )}
+
+            {exportTab === "snapshot" && (
+              <div className={styles.snapshotTab}>
+                <p className={styles.snapshotInfo}>
+                  สร้าง snapshot ทุกฟอร์แมตพร้อมกันจากข้อมูลผู้ใช้จริง (group: <code>real</code>) บันทึกลง <code>train/exports/real/</code>
+                </p>
+                <button
+                  onClick={() => void handleSnapshotExport()}
+                  disabled={snapshotting}
+                  className={styles.snapshotButton}
+                >
+                  {snapshotting ? "⏳  กำลังสร้าง snapshot..." : "🗂️  Create Snapshot"}
+                </button>
+                {snapshotResult && <pre className={styles.snapshotOutput}>{snapshotResult}</pre>}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Preview output */}
+        {previewJson && (
+          <section className={`${styles.panel} ${styles.toolsPanel}`}>
+            <div className={styles.panelHeader}>
+              <h2 className={styles.panelTitle}>Preview — ChatML (20 rows)</h2>
+              <button onClick={() => setPreviewJson("")} className={styles.dimButton}>✕ Close</button>
+            </div>
+            <pre className={styles.previewOutput}>{previewJson}</pre>
+          </section>
+        )}
+
       </div>
     </main>
   );
 }
 
+// Helper components
+
+function KpiCard({
+  icon, label, value, hint, accent,
+}: {
+  icon: string; label: string; value: string; hint?: string;
+  accent: "blue" | "orange" | "purple" | "green" | "teal" | "amber" | "slate";
+}) {
+  return (
+    <div className={`${styles.kpiCard} ${KPI_ACCENT[accent] ?? ""}`}>
+      <div className={styles.kpiIcon}>{icon}</div>
+      <div className={styles.kpiLabel}>{label}</div>
+      <div className={styles.kpiValue}>{value}</div>
+      {hint && <div className={styles.kpiHint}>{hint}</div>}
+    </div>
+  );
+}
+
+function BarChart({ items, colorClass, emptyText }: {
+  items: { label: string; value: number }[];
+  colorClass: string;
+  emptyText: string;
+}) {
+  const max = Math.max(...items.map((x) => x.value), 1);
+  if (items.length === 0) return <p className={styles.noData}>{emptyText}</p>;
+  return (
+    <div className={styles.barChart}>
+      {items.map((item) => (
+        <div key={item.label} className={styles.barRow}>
+          <div className={styles.barLabel}>{item.label}</div>
+          <div className={styles.barTrackOuter}>
+            <div
+              className={`${styles.barTrackFill} ${colorClass}`}
+              style={{ width: `${Math.max(4, Math.round((item.value / max) * 100))}%` }}
+            />
+          </div>
+          <div className={styles.barCount}>{formatNumber(item.value)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FilterField({ label, value, onChange, placeholder }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder: string;
+}) {
+  return (
+    <label className={styles.filterField}>
+      <span className={styles.filterLabel}>{label}</span>
+      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className={styles.filterInput} />
+    </label>
+  );
+}
+
+function ExportGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className={styles.exportGroup}>
+      <div className={styles.exportGroupTitle}>{title}</div>
+      <div className={styles.exportGroupButtons}>{children}</div>
+    </div>
+  );
+}
+
+function ExportButton({ label, id, onClick, exporting, variant }: {
+  label: string; id: string; onClick: () => void;
+  exporting: string | null; variant: string;
+}) {
+  const isActive = exporting === id;
+  const isDisabled = exporting !== null;
+  return (
+    <button
+      onClick={onClick}
+      disabled={isDisabled}
+      className={`${styles.exportBtn} ${EXPORT_BTN_VARIANT[variant] ?? ""} ${isActive ? styles.exportBtnActive : ""}`}
+    >
+      {isActive ? "↻ " : ""}{label}
+    </button>
+  );
+}
+
 function formatNumber(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
-}
-
-function ActionBlock({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className={styles.actionBlock}>
-      <h3 className={styles.blockTitle}>{title}</h3>
-      <p className={styles.blockDescription}>{description}</p>
-      {children}
-    </div>
-  );
-}
-
-function MiniBar({ value, max }: { value: number; max: number }) {
-  const pct = Math.max(6, Math.round((value / max) * 100));
-  return (
-    <div className={styles.miniBarTrack}>
-      <div className={styles.miniBarFill} style={{ width: `${pct}%` }} />
-    </div>
-  );
-}
-
-function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className={styles.statCard}>
-      <div className={styles.statLabel}>{label}</div>
-      <div className={styles.statValue}>{value}</div>
-      {hint ? <div className={styles.statHint}>{hint}</div> : null}
-    </div>
-  );
-}
-
-function Panel({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className={styles.panel}>
-      <h2 className={styles.sectionTitle}>{title}</h2>
-      {children}
-    </div>
-  );
-}
-
-function SimpleTable({
-  headers,
-  rows,
-}: {
-  headers: string[];
-  rows: Array<Array<string | number | ReactNode>>;
-}) {
-  return (
-    <div className={styles.tableWrap}>
-      <table className={styles.table}>
-        <thead>
-          <tr>
-            {headers.map((h) => (
-              <th key={h}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, idx) => (
-            <tr key={idx}>
-              {r.map((c, cidx) => (
-                <td key={`${idx}-${cidx}`}>{c}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
 }

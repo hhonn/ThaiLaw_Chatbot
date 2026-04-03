@@ -1,117 +1,165 @@
----
-title: Thai Law Chatbot
-emoji: ⚖️
-colorFrom: blue
-colorTo: indigo
-sdk: gradio
-sdk_version: "4.44.0"
-app_file: app/app.py
-pinned: false
-license: mit
-short_description: ถาม-ตอบกฎหมายไทยด้านแรงงานและผู้บริโภค
----
+# Thai Law Chatbot
 
-# ⚖️ Thai Law Chatbot
+ระบบถาม-ตอบกฎหมายไทยด้วยสถาปัตยกรรม RAG โดยแยกเป็น
 
-แชทบอทให้ข้อมูลกฎหมายไทยด้านแรงงานและผู้บริโภค ขับเคลื่อนด้วย RAG (Retrieval-Augmented Generation) + Typhoon API
+- Backend: FastAPI + LangChain + Chroma + Typhoon API
+- Frontend: Next.js App Router
+- Analytics: SQLite + data export สำหรับงานฝึกสอนโมเดล
 
-## ฟีเจอร์
-- 🔍 ค้นหาข้อมูลจากกฎหมายจริง 67+ มาตรา
-- 💬 รองรับการสนทนาต่อเนื่อง (chat history)
-- ⚡ ตอบแบบ streaming แบบ real-time
-- 📌 แสดงแหล่งอ้างอิงกฎหมายพร้อมลิงก์
-- 🏷️ จำแนกหมวดกฎหมายและระดับความเสี่ยง
+โครงการนี้รองรับการถามตอบแบบสตรีม (SSE), citation จากแหล่งกฎหมาย, OTP login ผ่านอีเมล และ pipeline สำหรับเก็บ/ส่งออกข้อมูลเชิงวิเคราะห์
 
-## กฎหมายที่ครอบคลุม
-- พ.ร.บ. คุ้มครองแรงงาน พ.ศ. 2541
-- พ.ร.บ. คุ้มครองผู้บริโภค พ.ศ. 2522
-- ประมวลกฎหมายแพ่งและพาณิชย์
-- ประมวลกฎหมายอาญา (มาตราที่เกี่ยวข้อง)
-- พ.ร.บ. แรงงานสัมพันธ์ พ.ศ. 2518
-- พ.ร.บ. ประกันสังคม พ.ศ. 2533
-- พ.ร.บ. เงินทดแทน พ.ศ. 2537
-- พ.ร.บ. วิธีพิจารณาคดีแรงงาน พ.ศ. 2522
-- พ.ร.บ. ขายตรงและตลาดแบบตรง พ.ศ. 2545
+## ไฮไลต์ของระบบ
 
-## การติดตั้งและรัน (local)
+- Hybrid retrieval: BM25 + Vector search + reranker (CrossEncoder)
+- Streaming answer ผ่าน `/api/chat/stream`
+- Domain / risk classification ในผลลัพธ์
+- Analytics event logging พร้อม anonymization และ redaction
+- Export ชุดข้อมูลฝึกสอนเป็น `questions`, `pairs`, `instruction` (native/chatml/alpaca)
+- สร้าง snapshot ชุดข้อมูลจริงและ sample ได้อัตโนมัติ
 
-```bash
-# Clone
-git clone <your-repo>
-cd thai-law-chatbot
+## เทคโนโลยีหลัก
 
-# สร้าง .env จาก template
-cp .env.example .env
-# แก้ TYPHOON_API_KEY ใน .env
+- Python: FastAPI, Uvicorn, LangChain, ChromaDB, sentence-transformers
+- LLM API: Typhoon (`typhoon-v2.5-30b-a3b-instruct`)
+- Frontend: Next.js 16, React 19, TypeScript
+- Storage: SQLite (`data/analytics/usage.sqlite3`) และ Chroma local persistence
 
-# ติดตั้ง dependencies
-pip install -r requirements.txt
+## โครงสร้างโปรเจกต์
 
-# Rebuild vector store (ถ้ายังไม่มี หรืออัพเดทข้อมูล)
-python ingest/build_chroma.py
-
-# รันแอป
-python app/app.py
+```text
+app/                 # FastAPI backend + RAG chain + auth + analytics
+frontend/            # Next.js frontend
+ingest/              # scripts สร้าง/รวมข้อมูลกฎหมายและ build Chroma
+scripts/             # PowerShell งาน schedule/bootstrap
+train/exports/       # analytics export snapshots
+data/                # local DB และ Chroma persistence
+evaluate.py          # retrieval/answer evaluation
+eval_results.json    # ผลลัพธ์ evaluation ล่าสุด
 ```
 
-## HuggingFace Spaces Deployment
-ตั้งค่า Secret `TYPHOON_API_KEY` ใน Space Settings ของคุณ
+## การตั้งค่าเริ่มต้น (Backend)
 
-## Analytics Operations (Production)
+1. สร้าง env file
 
-ระบบ analytics export มีการแยกไฟล์ดังนี้:
-- `train/exports/real` สำหรับ snapshot ข้อมูลใช้งานจริง
-- `train/exports/samples` สำหรับ snapshot ที่สร้างจาก sample generator
+```powershell
+Copy-Item .env.example .env
+```
 
-ระบบจะลบไฟล์ snapshot เก่าอัตโนมัติจาก retention policy โดยอ่านจาก env:
-- `ANALYTICS_EXPORT_RETENTION_DAYS=30`
+2. เติมค่าใน `.env` อย่างน้อย
 
-### รัน one-click pipeline เอง
+- `TYPHOON_API_KEY`
+- `SMTP_EMAIL`, `SMTP_PASSWORD` (ถ้าต้องการใช้งาน OTP)
+- `ANALYTICS_ADMIN_KEY` (ถ้าต้องการป้องกัน endpoint analytics ฝั่ง admin)
+
+3. ติดตั้ง dependencies
+
+```powershell
+pip install -r requirements.txt
+```
+
+4. สร้าง/อัปเดต Chroma index
+
+```powershell
+python ingest/build_chroma.py
+```
+
+5. รัน backend API
+
+```powershell
+python app/api.py
+```
+
+ทดสอบ health check:
+
+```powershell
+curl http://127.0.0.1:8000/api/health
+```
+
+## การรัน Frontend
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+ค่า default ของ frontend จะเรียก backend ที่ `http://127.0.0.1:8000`
+ถ้าต้องการเปลี่ยน ให้ตั้ง `NEXT_PUBLIC_API_URL` ในไฟล์ `frontend/.env.local`
+
+## API หลัก
+
+- `GET /api/health`
+- `POST /api/chat`
+- `POST /api/chat/stream` (SSE)
+- `POST /api/auth/send-code`
+- `POST /api/auth/verify-code`
+- `POST /api/analytics/event`
+- `GET /api/analytics/summary` (admin key ถ้าตั้ง `ANALYTICS_ADMIN_KEY`)
+- `GET /api/analytics/users` (admin key)
+- `POST /api/analytics/export` (admin key)
+- `POST /api/analytics/export/snapshot` (admin key)
+- `POST /api/analytics/generate-samples` (admin key)
+- `POST /api/analytics/bootstrap-training-data` (admin key)
+
+## Evaluation
+
+รันแบบ retrieval-only (ไม่เรียก LLM):
+
+```powershell
+python evaluate.py --retrieval-only
+```
+
+รันแบบ answer quality:
+
+```powershell
+python evaluate.py --answer-only
+```
+
+รันบน held-out set:
+
+```powershell
+python evaluate.py --held-out
+```
+
+ผลลัพธ์จะบันทึกที่ `eval_results.json`
+
+## OpenLaw Integration (Optional)
+
+ดึงข้อมูล OpenLaw:
+
+```powershell
+python ingest/fetch_openlaw_krisdika.py --latest-only --max-rows 8000
+```
+
+รวม OpenLaw เข้า index:
+
+```powershell
+$env:INCLUDE_OPENLAW="1"
+python ingest/build_chroma.py
+```
+
+ปิดการรวม OpenLaw:
+
+```powershell
+$env:INCLUDE_OPENLAW="0"
+python ingest/build_chroma.py
+```
+
+## Analytics Bootstrap / Schedule (Windows)
+
+รัน bootstrap ทันที:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run_daily_bootstrap.ps1 -BaseUrl "http://127.0.0.1:8000"
 ```
 
-### ตั้ง schedule รายวันบน Windows
+ลงทะเบียน task รายวัน:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/register_daily_bootstrap_task.ps1 -RunTime "02:00"
 ```
 
-ตัว task จะเรียก `scripts/run_daily_bootstrap.ps1` ทุกวันตามเวลาที่กำหนด
+## หมายเหตุ
 
-## OpenLaw Data Integration (Phase-by-Phase)
-
-### Phase 1: ดึงข้อมูล OpenLaw OCS Krisdika
-
-```bash
-python ingest/fetch_openlaw_krisdika.py --latest-only --max-rows 8000
-```
-
-ผลลัพธ์จะถูกบันทึกที่ `ingest/laws_openlaw_krisdika.json`
-
-### Phase 2: รวม OpenLaw เข้ากับ Chroma index
-
-```bash
-# Windows PowerShell
-$env:INCLUDE_OPENLAW="1"
-python ingest/build_chroma.py
-```
-
-ถ้าไม่ต้องการรวม OpenLaw ให้ปิดด้วย:
-
-```bash
-$env:INCLUDE_OPENLAW="0"
-python ingest/build_chroma.py
-```
-
-### Phase 3: รันแอปและทดสอบผล
-
-```bash
-python app/app.py
-```
-
-แนะนำให้เทียบคำถามชุดเดิมก่อน-หลังเปิด `INCLUDE_OPENLAW=1` เพื่อวัดความแม่นยำและคุณภาพ citation
-
-> ⚠️ แอปนี้ให้ข้อมูลกฎหมายเบื้องต้นเท่านั้น ไม่ใช่คำปรึกษาทางกฎหมายอย่างเป็นทางการ  
-> สำหรับกรณีสำคัญ ควรปรึกษาทนายความหรือหน่วยงานที่เกี่ยวข้อง
+- โปรเจกต์นี้เป็นเครื่องมือให้ข้อมูลกฎหมายเบื้องต้น ไม่ใช่คำปรึกษากฎหมายอย่างเป็นทางการ
+- สำหรับประเด็นสำคัญหรือมีผลทางคดี ควรปรึกษาทนายความหรือหน่วยงานที่เกี่ยวข้อง
