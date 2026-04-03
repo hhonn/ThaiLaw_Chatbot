@@ -7,9 +7,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python deps first (layer cache)
+# Install CPU-only PyTorch first to prevent multi-GB CUDA libraries from being pulled
+# (Cloud Run has no GPU; CUDA libs waste ~1.5 GB of RAM at runtime)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining Python deps (torch already installed, won't be replaced)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Pre-download embedding + reranker models into the image so there is no
+# network download on first container start (avoids cold-start OOM / timeout)
+RUN python -c "
+from sentence_transformers import SentenceTransformer, CrossEncoder
+print('Downloading BAAI/bge-m3 ...')
+SentenceTransformer('BAAI/bge-m3')
+print('Downloading BAAI/bge-reranker-v2-m3 ...')
+CrossEncoder('BAAI/bge-reranker-v2-m3')
+print('Models cached.')
+"
 
 # Copy application code
 COPY app/ ./app/
