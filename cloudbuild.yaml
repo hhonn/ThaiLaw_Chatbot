@@ -48,8 +48,8 @@ steps:
           --platform=managed \
           --allow-unauthenticated \
           --port=8000 \
-          --memory=8Gi \
-          --cpu=2 \
+          --memory=16Gi \
+          --cpu=4 \
           --min-instances=0 \
           --max-instances=3 \
           --timeout=300 \
