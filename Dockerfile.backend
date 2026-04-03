@@ -15,9 +15,16 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Prevent HuggingFace Hub from going online at container startup.
+# Models are pre-baked below; offline mode forces use of local cache only.
+# Without this, HF Hub tries to re-download every start, fills the
+# container writable layer (~2 GB) and can trigger OOM.
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+
 # Pre-download embedding + reranker models into the image so there is no
 # network download on first container start (avoids cold-start OOM / timeout)
-RUN python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-m3'); CrossEncoder('BAAI/bge-reranker-v2-m3'); print('Models cached.')"
+RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-m3'); CrossEncoder('BAAI/bge-reranker-v2-m3'); print('Models cached.')"
 
 # Copy application code
 COPY app/ ./app/
