@@ -1,9 +1,10 @@
 # Google Cloud Build pipeline
 #
 # Substitution variables (set in Cloud Build trigger or via --substitutions):
-#   _REGION          : e.g. asia-southeast1
-#   _BACKEND_SERVICE : Cloud Run service name for backend  (e.g. lawbot-backend)
-#   _FRONTEND_SERVICE: Cloud Run service name for frontend (e.g. lawbot-frontend)
+#   _REGION                    : e.g. asia-southeast1
+#   _BACKEND_SERVICE           : Cloud Run service name for backend  (e.g. lawbot-backend)
+#   _FRONTEND_SERVICE          : Cloud Run service name for frontend (e.g. lawbot-frontend)
+#   _GOOGLE_CLIENT_ID          : Google OAuth 2.0 Client ID (NEXT_PUBLIC — baked at build time)
 #
 # The backend Cloud Run URL is fetched dynamically after the backend deploy step
 # so the frontend image can be built with the correct NEXT_PUBLIC_API_URL baked in.
@@ -12,6 +13,7 @@ substitutions:
   _REGION: asia-southeast1
   _BACKEND_SERVICE: lawbot-backend
   _FRONTEND_SERVICE: lawbot-frontend
+  _GOOGLE_CLIENT_ID: "489315741880-rdcfv9i64h1c3h10f2r89lt1ja0h708n.apps.googleusercontent.com"
 
 steps:
   # ── Step 1: Build backend image ────────────────────────────────────────────
@@ -84,6 +86,7 @@ steps:
         BACKEND_URL=$$(cat /workspace/backend_url.txt)
         docker build \
           --build-arg NEXT_PUBLIC_API_URL=$$BACKEND_URL \
+          --build-arg NEXT_PUBLIC_GOOGLE_CLIENT_ID=${_GOOGLE_CLIENT_ID} \
           -t asia-southeast1-docker.pkg.dev/$PROJECT_ID/lawbot/${_FRONTEND_SERVICE}:latest \
           -f Dockerfile.frontend .
 
