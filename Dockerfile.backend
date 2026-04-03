@@ -17,14 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download embedding + reranker models into the image so there is no
 # network download on first container start (avoids cold-start OOM / timeout)
-RUN python -c "
-from sentence_transformers import SentenceTransformer, CrossEncoder
-print('Downloading BAAI/bge-m3 ...')
-SentenceTransformer('BAAI/bge-m3')
-print('Downloading BAAI/bge-reranker-v2-m3 ...')
-CrossEncoder('BAAI/bge-reranker-v2-m3')
-print('Models cached.')
-"
+RUN python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-m3'); CrossEncoder('BAAI/bge-reranker-v2-m3'); print('Models cached.')"
 
 # Copy application code
 COPY app/ ./app/
