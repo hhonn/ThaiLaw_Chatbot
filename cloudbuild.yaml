@@ -52,7 +52,7 @@ steps:
           --port=8000 \
           --memory=16Gi \
           --cpu=4 \
-          --min-instances=0 \
+          --min-instances=1 \
           --max-instances=3 \
           --timeout=300 \
           --set-secrets=TYPHOON_API_KEY=TYPHOON_API_KEY:latest,SMTP_PASSWORD=SMTP_PASSWORD:latest,ANALYTICS_ADMIN_KEY=ANALYTICS_ADMIN_KEY:latest,SMTP_EMAIL=SMTP_EMAIL:latest \

@@ -137,7 +137,7 @@ export interface AnalyticsBootstrapResult {
  - Calls onData for each partial update, onDone when finished.
 */
 
-const STREAM_TIMEOUT_MS = 90_000;  // 90 seconds
+const STREAM_TIMEOUT_MS = 180_000;  // 180 seconds (cold start with large models can take ~60s)
 const FETCH_TIMEOUT_MS  = 30_000;  // 30 seconds
 
 function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
@@ -208,7 +208,7 @@ export async function streamChat(
     onDone();
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      onError("หมดเวลาการเชื่อมต่อ (90 วินาที) กรุณาลองใหม่อีกครั้ง");
+      onError("หมดเวลาการเชื่อมต่อ (3 นาที) กรุณาลองใหม่อีกครั้ง");
     } else {
       onError(err instanceof Error ? err.message : "Unknown error");
     }
