@@ -20,7 +20,7 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_HOST     = os.environ.get("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT     = int(os.environ.get("SMTP_PORT", "587"))
 OTP_EXPIRY_SECONDS = 600  # 10 minutes
-OTP_RATE_LIMIT     = 3    # max OTP requests per window per email
+OTP_RATE_LIMIT     = int(os.environ.get("OTP_RATE_LIMIT", "10"))
 OTP_RATE_WINDOW    = 3600  # 1 hour
 
 # SQLite OTP store
