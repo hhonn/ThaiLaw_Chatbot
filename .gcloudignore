@@ -1,0 +1,46 @@
+# Cloud Build source upload ignore rules.
+# Mirrors .gitignore but keeps data/chroma_unified/ so it is baked into the
+# Docker image (ChromaDB is only ~7 MB and needed at runtime).
+.git/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.env
+.env.*
+!.env.example
+venv/
+env/
+.venv/
+.conda/
+
+.vscode/
+.idea/
+*.swp
+
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*
+
+# Exclude only the non-unified chroma DBs; chroma_unified is intentionally kept
+data/chroma/
+data/chroma_local/
+data/analytics/
+
+train/
+
+models/
+*.bin
+*.pt
+*.safetensors
+
+*.log
+logs/
+
+eval_results.json
